@@ -10,10 +10,7 @@ from astrbot.api.provider import LLMResponse
 from astrbot.api.message_components import Plain
 import astrbot.core.message.components as Comp
 
-try:
-    import pillowmd
-except Exception:
-    pillowmd = None
+import pillowmd
 
 
 @register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.2.0")
@@ -55,15 +52,10 @@ class MyPlugin(Star):
     async def initialize(self):
         """插件初始化：加载 pillowmd 样式或使用默认样式"""
         logger.info("初始化无浏览器Markdown渲染（pillowmd）...")
-        if pillowmd is None:
-            logger.error("pillowmd 未安装，请先执行: pip install pillowmd")
-            return
         await self._init_style()
 
     async def _init_style(self):
         """根据配置加载本地样式目录；失败则退回默认样式"""
-        if pillowmd is None:
-            return
         if self.style_path:
             if os.path.exists(self.style_path):
                 try:
@@ -203,8 +195,6 @@ class MyPlugin(Star):
 
     async def _render_markdown_to_image(self, text: str):
         """渲染Markdown为图片，优先使用自定义样式；否则使用默认渲染"""
-        if pillowmd is None:
-            raise RuntimeError("pillowmd 未安装")
         cleaned = self._clean_markdown_text(text)
 
         if self._style is not None:
