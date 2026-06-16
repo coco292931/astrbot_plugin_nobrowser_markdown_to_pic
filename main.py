@@ -11,10 +11,15 @@ from astrbot.api.provider import LLMResponse
 from astrbot.api.message_components import Plain
 import astrbot.core.message.components as Comp
 
+# 必须在 import pillowmd 之前打补丁，使首次运行即生效、无需重启
+from .pillowmd_patch import apply_patch as _apply_pillowmd_patch
+
+_apply_pillowmd_patch(logger)
+
 import pillowmd
 
 
-@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.5.0")
+@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.6.0")
 class MyPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
