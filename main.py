@@ -197,6 +197,11 @@ class MyPlugin(Star):
             return f"\n```\n{content}\n```\n"
 
         text = re.sub(pattern, replace_match, text, flags=re.DOTALL)
+
+        # 归一化 \dfrac / \tfrac -> \frac：pillowlatex 不认 \dfrac/\tfrac，
+        # 会原样输出成字面 "dfrac"。两者在显示效果上等价于 \frac，安全替换。
+        text = re.sub(r"\\[dt]frac(?![A-Za-z])", r"\\frac", text)
+
         return text.strip()
 
     async def _render_markdown_to_image(self, text: str, render_opts: dict = None):
