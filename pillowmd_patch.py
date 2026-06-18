@@ -97,9 +97,21 @@ def apply_patch(logger=None):
 
     patched = content.replace(_ANCHOR, _REPLACEMENT, 1)
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(patched)
+        import os
+        import tempfile
+
+        dir_name = os.path.dirname(path)
+        tmp_path = None
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, dir=dir_name) as tf:
+            tf.write(patched)
+            tmp_path = tf.name
+        os.replace(tmp_path, path)
     except Exception as e:
+        try:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
         _log(f"pillowmd 补丁：写入失败，跳过（{e}）")
         return f"error:{e}"
 
