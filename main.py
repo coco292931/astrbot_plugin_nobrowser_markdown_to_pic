@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import tempfile
+import dataclasses
 
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 from astrbot.api.star import Context, Star, register
@@ -10,10 +11,15 @@ from astrbot.api.provider import LLMResponse
 from astrbot.api.message_components import Plain
 import astrbot.core.message.components as Comp
 
+# 必须在 import pillowmd 之前打补丁，使首次运行即生效、无需重启
+from .pillowmd_patch import apply_patch as _apply_pillowmd_patch
+
+_apply_pillowmd_patch(logger)
+
 import pillowmd
 
 
-@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.2.0")
+@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.6.1")
 class MyPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -191,19 +197,59 @@ class MyPlugin(Star):
             return f"\n```\n{content}\n```\n"
 
         text = re.sub(pattern, replace_match, text, flags=re.DOTALL)
+
+        # 归一化 \dfrac / \tfrac -> \frac：pillowlatex 不认 \dfrac/\tfrac，
+        # 会原样输出成字面 "dfrac"。两者在显示效果上等价于 \frac，安全替换。
+        text = re.sub(r"\\[dt]frac(?![A-Za-z])", r"\\frac", text)
+
         return text.strip()
 
-    async def _render_markdown_to_image(self, text: str):
-        """渲染Markdown为图片，优先使用自定义样式；否则使用默认渲染"""
-        cleaned = self._clean_markdown_text(text)
+    async def _render_markdown_to_image(self, text: str, render_opts: dict = None):
+        """渲染Markdown为图片，优先使用自定义样式；否则使用默认渲染。
 
-        if self._style is not None:
+        render_opts 可选项（均为 LLM 工具可控的安全参数）：
+            title(str)      标题
+            autoPage(bool)  自动分页（接近黄金分割比）
+            noDecoration(bool) 透明背景、无装饰
+            fontSize(int)   正文字号（覆盖样式）
+            xSizeMax(int)   单行元素最大宽度（覆盖样式，近似图片宽度）
+        """
+        cleaned = self._clean_markdown_text(text)
+        opts = render_opts or {}
+
+        # 基础样式：优先用已加载的自定义样式，否则使用 pillowmd 默认样式
+        base_style = self._style if self._style is not None else pillowmd.MdStyle()
+
+        # 按需覆盖样式字段（不改动原样式对象，生成副本）
+        style_overrides = {}
+        if isinstance(opts.get("fontSize"), int) and opts["fontSize"] > 0:
+            style_overrides["fontSize"] = max(8, min(opts["fontSize"], 200))
+        if isinstance(opts.get("xSizeMax"), int) and opts["xSizeMax"] > 0:
+            style_overrides["xSizeMax"] = max(200, min(opts["xSizeMax"], 4000))
+
+        # 仅在 base_style 为 dataclass 时才支持 dataclasses.replace 覆盖字段
+        if style_overrides and dataclasses.is_dataclass(base_style):
+            style = dataclasses.replace(base_style, **style_overrides)
+        else:
+            style = base_style
+
+        # 渲染级参数
+        render_kwargs = {}
+        if isinstance(opts.get("title"), str) and opts["title"].strip():
+            render_kwargs["title"] = opts["title"].strip()
+        if opts.get("autoPage") is True:
+            render_kwargs["autoPage"] = True
+        if opts.get("noDecoration") is True:
+            render_kwargs["noDecoration"] = True
+
+        # 若加载的是旧版/自定义样式渲染器（仅支持同步 Render），则回退到 Render
+        if self._style is not None and not dataclasses.is_dataclass(self._style) and hasattr(self._style, "Render"):
             loop = asyncio.get_running_loop()
             img = await loop.run_in_executor(None, lambda: self._style.Render(cleaned))
             return img
-        else:
-            img = await pillowmd.MdToImage(cleaned)
-            return img
+
+        img = await pillowmd.MdToImage(cleaned, style=style, **render_kwargs)
+        return img
 
     async def _save_temp_image(self, img):
         """保存图片到临时文件，并返回路径"""
@@ -241,15 +287,16 @@ class MyPlugin(Star):
         path = await loop.run_in_executor(None, save)
         return path
 
-    async def _generate_and_send_image(self, text: str, event: AstrMessageEvent, is_llm_response: bool):
+    async def _generate_and_send_image(self, text: str, event: AstrMessageEvent, is_llm_response: bool, render_opts: dict = None):
         """
         渲染并发送图片：
         - is_llm_response=True 时，直接通过 event.send 发图片消息
         - is_llm_response=False 时，通过 result 形式 yield 给上层
         - 无论哪种情况，只要开启 extract_links_and_code，就会额外发送一条“链接/代码”消息
+        - render_opts 透传给渲染器，支持 LLM 工具控制标题/字号/宽度/分页/透明背景
         """
         try:
-            img = await self._render_markdown_to_image(text)
+            img = await self._render_markdown_to_image(text, render_opts)
             image_path = await self._save_temp_image(img)
 
             # 发送图片
@@ -280,11 +327,14 @@ class MyPlugin(Star):
 
         except Exception as e:
             logger.error(f"处理失败: {str(e)}")
-            error_msg = f"转换失败: {str(e)}"
             if is_llm_response:
-                await event.send(MessageChain().message(message=error_msg))
+                # LLM 工具路径：向上抛出，由 render_markdown_to_image 捕获并
+                # 如实返回 status=error，避免渲染失败却告知 LLM 成功。
+                # 用户反馈交由 LLM 依据 error 结果决定（不再发送技术错误文本）。
+                raise
             else:
-                yield event.plain_result(error_msg)
+                # 指令 / 过滤器路径：保持原行为，回退为错误文本消息
+                yield event.plain_result(f"转换失败: {str(e)}")
 
     @filter.on_decorating_result(priority=-9999)
     async def on_decorating_result(self, event: AstrMessageEvent):
@@ -350,6 +400,46 @@ class MyPlugin(Star):
 
         async for result in self._generate_and_send_image(message_str, event, False):
             yield result
+
+    @filter.llm_tool(name="render_markdown_to_image")
+    async def render_markdown_to_image(
+        self,
+        event: AstrMessageEvent,
+        markdown: str = "",
+        title: str = "",
+        font_size: int = 0,
+        width: int = 0,
+        auto_page: bool = False,
+        transparent_bg: bool = False,
+    ) -> dict:
+        """将 Markdown 文本渲染为图片并直接发送给用户。当回复包含表格、代码块、标题、列表、公式、引用等富文本排版，文本形式难以清晰展示时调用本工具。可选参数用于控制排版样式，不需要时留空即可使用默认样式。
+
+        Args:
+            markdown(string): 要渲染的完整 Markdown 文本，支持标题、列表、表格、代码块、公式等语法
+            title(string): 可选，图片顶部的标题文字，留空则不显示标题
+            font_size(number): 可选，正文字号，留空或 0 使用默认（默认约 25）；建议范围 8-200，越大字越大图越大
+            width(number): 可选，单行内容最大宽度（像素，近似图片宽度），留空或 0 使用默认（默认约 1000）；建议范围 200-4000
+            auto_page(boolean): 可选，是否自动分页排版（尽量接近黄金分割比），内容很长时可设为 true
+            transparent_bg(boolean): 可选，是否使用透明背景、去除装饰，默认 false
+        """
+        md = (markdown or "").strip()
+        if not md:
+            return {"status": "error", "message": "markdown 内容不能为空。"}
+        render_opts = {
+            "title": title,
+            "fontSize": font_size,
+            "xSizeMax": width,
+            "autoPage": auto_page,
+            "noDecoration": transparent_bg,
+        }
+        try:
+            # is_llm_response=True 时内部直接通过 event.send 发图，不走 yield
+            async for _ in self._generate_and_send_image(md, event, True, render_opts):
+                pass
+            return {"status": "success", "message": "Markdown 已渲染为图片并发送给用户。"}
+        except Exception as e:
+            logger.error(f"Markdown 转图片失败(llm_tool): {e}", exc_info=True)
+            return {"status": "error", "message": f"渲染失败: {e}"}
 
     async def terminate(self):
         """插件销毁：无浏览器，无需清理资源"""

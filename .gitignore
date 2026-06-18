@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 测试产物（本地渲染输出/输入，不纳入版本库）
+*.png
+*.jpg
+*.md
+!README.md
