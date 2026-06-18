@@ -217,8 +217,8 @@ class MyPlugin(Star):
         cleaned = self._clean_markdown_text(text)
         opts = render_opts or {}
 
-        # 基础样式：优先用已加载的自定义样式，否则用 pillowmd 默认样式
-        base_style = self._style if self._style is not None else pillowmd.DEFAULT_STYLE
+        # 基础样式：优先用已加载的自定义样式，否则使用 pillowmd 默认样式
+        base_style = self._style if self._style is not None else pillowmd.MdStyle()
 
         # 按需覆盖样式字段（不改动原样式对象，生成副本）
         style_overrides = {}
@@ -226,10 +226,15 @@ class MyPlugin(Star):
             style_overrides["fontSize"] = max(8, min(opts["fontSize"], 200))
         if isinstance(opts.get("xSizeMax"), int) and opts["xSizeMax"] > 0:
             style_overrides["xSizeMax"] = max(200, min(opts["xSizeMax"], 4000))
-        style = dataclasses.replace(base_style, **style_overrides) if style_overrides else base_style
 
-        # 渲染级参数（MdToImage / Render 共有）
-        render_kwargs = {"style": style}
+        # 仅在 base_style 为 dataclass 时才支持 dataclasses.replace 覆盖字段
+        if style_overrides and dataclasses.is_dataclass(base_style):
+            style = dataclasses.replace(base_style, **style_overrides)
+        else:
+            style = base_style
+
+        # 渲染级参数
+        render_kwargs = {}
         if isinstance(opts.get("title"), str) and opts["title"].strip():
             render_kwargs["title"] = opts["title"].strip()
         if opts.get("autoPage") is True:
@@ -237,8 +242,13 @@ class MyPlugin(Star):
         if opts.get("noDecoration") is True:
             render_kwargs["noDecoration"] = True
 
-        # 统一走 MdToImage，它直接接受 style 参数；自定义样式也通过 style= 传入
-        img = await pillowmd.MdToImage(cleaned, **render_kwargs)
+        # 若加载的是旧版/自定义样式渲染器（仅支持同步 Render），则回退到 Render
+        if self._style is not None and not dataclasses.is_dataclass(self._style) and hasattr(self._style, "Render"):
+            loop = asyncio.get_running_loop()
+            img = await loop.run_in_executor(None, lambda: self._style.Render(cleaned))
+            return img
+
+        img = await pillowmd.MdToImage(cleaned, style=style, **render_kwargs)
         return img
 
     async def _save_temp_image(self, img):
