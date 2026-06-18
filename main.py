@@ -19,7 +19,7 @@ _apply_pillowmd_patch(logger)
 import pillowmd
 
 
-@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.6.0")
+@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.6.1")
 class MyPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -327,11 +327,14 @@ class MyPlugin(Star):
 
         except Exception as e:
             logger.error(f"处理失败: {str(e)}")
-            error_msg = f"转换失败: {str(e)}"
             if is_llm_response:
-                await event.send(MessageChain().message(message=error_msg))
+                # LLM 工具路径：向上抛出，由 render_markdown_to_image 捕获并
+                # 如实返回 status=error，避免渲染失败却告知 LLM 成功。
+                # 用户反馈交由 LLM 依据 error 结果决定（不再发送技术错误文本）。
+                raise
             else:
-                yield event.plain_result(error_msg)
+                # 指令 / 过滤器路径：保持原行为，回退为错误文本消息
+                yield event.plain_result(f"转换失败: {str(e)}")
 
     @filter.on_decorating_result(priority=-9999)
     async def on_decorating_result(self, event: AstrMessageEvent):
