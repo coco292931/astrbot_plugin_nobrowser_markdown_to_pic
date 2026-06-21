@@ -13,13 +13,17 @@ import astrbot.core.message.components as Comp
 
 # 必须在 import pillowmd 之前打补丁，使首次运行即生效、无需重启
 from .pillowmd_patch import apply_patch as _apply_pillowmd_patch
+from .pillowmd_patch import apply_latex_patch as _apply_pillowlatex_patch
 
 _apply_pillowmd_patch(logger)
 
 import pillowmd
 
+# pillowlatex 命令补全须在 import 之后（依赖其活模块对象做 monkey-patch）
+_apply_pillowlatex_patch(logger)
 
-@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.6.1")
+
+@register("astrbot_plugin_nobrowser_markdown_to_pic", "Xican", "无浏览器Markdown转图片", "1.7.0")
 class MyPlugin(Star):
 
     def __init__(self, context: Context, config: AstrBotConfig):
