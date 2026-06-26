@@ -1,1 +1,7 @@
-pillowmd
+# 从 fork 的 main 分支安装（含公式毒化/箭头/花体/间距/斜体/对齐等修复，
+# 尚未合并回上游 / 未发布到 PyPI）。
+# pillowlatex 必须列在前面：pillowmd 依赖 pillowlatex>=0.1.4，先指定 fork 版
+# （0.1.5）满足约束，避免 pip 从 PyPI 拉回旧版。
+# 部署环境需具备 git CLI 且能访问 GitHub。
+git+https://github.com/coco292931/pillowlatex.git@main
+git+https://github.com/coco292931/CustomMarkdownImage.git@main
